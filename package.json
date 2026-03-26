@@ -1,0 +1,34 @@
+{
+  "name": "langchainqs",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node src/agent.ts",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/am-MongoDB/LangChainQS.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/am-MongoDB/LangChainQS/issues"
+  },
+  "homepage": "https://github.com/am-MongoDB/LangChainQS#readme",
+  "dependencies": {
+    "@langchain/core": "^1.1.36",
+    "@langchain/langgraph": "^1.2.5",
+    "@langchain/openai": "^1.3.1",
+    "dotenv": "^17.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}
