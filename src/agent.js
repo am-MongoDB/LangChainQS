@@ -5,10 +5,12 @@
 import { ChatAnthropic } from "@langchain/anthropic";
 import { tool } from "@langchain/core/tools";
 import * as z from "zod";
+import "dotenv/config";
 
 const model = new ChatAnthropic({
   model: "claude-sonnet-4-6",
   temperature: 0,
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 // Define tools
@@ -59,8 +61,6 @@ import {
   StateSchema,
   MessagesValue,
   ReducedValue,
-  GraphNode,
-  ConditionalEdgeRouter,
   START,
   END,
 } from "@langchain/langgraph";
@@ -80,7 +80,7 @@ const MessagesState = new StateSchema({
 
 import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 
-const llmCall: GraphNode<typeof MessagesState> = async (state) => {
+const llmCall = async (state) => {
   const response = await modelWithTools.invoke([
     new SystemMessage(
       "You are a helpful assistant tasked with performing arithmetic on a set of inputs."
@@ -99,17 +99,17 @@ const llmCall: GraphNode<typeof MessagesState> = async (state) => {
 // Step 4: Tool node
 // ==============================
 
-const toolNode: GraphNode<typeof MessagesState> = async (state) => {
+const toolNode = async (state) => {
   const lastMessage = state.messages[state.messages.length - 1];
 
   if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
     return { messages: [] };
   }
 
-  const result: ToolMessage[] = [];
+  const result = [];
 
   for (const toolCall of lastMessage.tool_calls ?? []) {
-    const tool = toolsByName[toolCall.name as keyof typeof toolsByName];
+    const tool = toolsByName[toolCall.name];
     const observation = await tool.invoke(toolCall);
     result.push(observation);
   }
@@ -122,7 +122,7 @@ const toolNode: GraphNode<typeof MessagesState> = async (state) => {
 // Step 5: Conditional routing
 // ==============================
 
-const shouldContinue = (state: typeof MessagesState.State) => {
+const shouldContinue = (state) => {
   const lastMessage = state.messages[state.messages.length - 1];
 
   if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
