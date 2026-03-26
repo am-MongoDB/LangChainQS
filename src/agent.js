@@ -8,6 +8,7 @@ import * as z from "zod";
 import "dotenv/config";
 
 const model = new ChatAnthropic({
+  baseURL: "https://grove-gateway-prod.azure-api.net/grove-foundry-prod/anthropic/v1",
   model: "claude-sonnet-4-6",
   temperature: 0,
   apiKey: process.env.ANTHROPIC_API_KEY,
