@@ -1,17 +1,28 @@
-// ==============================
-// Step 1: Define tools and model
-// ==============================
-
-import { ChatAnthropic } from "@langchain/anthropic";
 import { tool } from "@langchain/core/tools";
 import * as z from "zod";
-import "dotenv/config";
+import "dotenv/config"; 
+import { ChatOpenAI } from "@langchain/openai";
+import {
+  StateGraph,
+  StateSchema,
+  MessagesValue,
+  ReducedValue,
+  START,
+  END,
+} from "@langchain/langgraph";
+import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+import { HumanMessage } from "@langchain/core/messages";
 
-const model = new ChatAnthropic({
-  baseURL: "https://grove-gateway-prod.azure-api.net/grove-foundry-prod/anthropic/v1",
-  model: "claude-sonnet-4-6",
+const model = new ChatOpenAI({
+  modelName: "gpt-5.4",
   temperature: 0,
-  apiKey: process.env.ANTHROPIC_API_KEY,
+  configuration: {
+    baseURL: "https://grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1",
+    apiKey: "placeholder",
+    defaultHeaders: {
+      "api-key": process.env.OPENAI_API_KEY,
+    },
+  },
 });
 
 // Define tools
@@ -33,7 +44,12 @@ const multiply = tool(({ a, b }) => a * b, {
   }),
 });
 
-const divide = tool(({ a, b }) => a / b, {
+// Just to show how to create the tool without using a lambda function
+const divideFn = function({ a, b }) {
+  return a / b;
+};
+
+const divide = tool(divideFn, {
   name: "divide",
   description: "Divide two numbers",
   schema: z.object({
@@ -57,15 +73,6 @@ const modelWithTools = model.bindTools(tools);
 // Step 2: Define state
 // ==============================
 
-import {
-  StateGraph,
-  StateSchema,
-  MessagesValue,
-  ReducedValue,
-  START,
-  END,
-} from "@langchain/langgraph";
-
 const MessagesState = new StateSchema({
   messages: MessagesValue,
   llmCalls: new ReducedValue(
@@ -74,12 +81,9 @@ const MessagesState = new StateSchema({
   ),
 });
 
-
 // ==============================
 // Step 3: Model node
 // ==============================
-
-import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 
 const llmCall = async (state) => {
   const response = await modelWithTools.invoke([
@@ -142,8 +146,6 @@ const shouldContinue = (state) => {
 // Step 6: Build and run agent
 // ==============================
 
-import { HumanMessage } from "@langchain/core/messages";
-
 const agent = new StateGraph(MessagesState)
   .addNode("llmCall", llmCall)
   .addNode("toolNode", toolNode)
@@ -155,7 +157,10 @@ const agent = new StateGraph(MessagesState)
 // Invoke
 async function main() {
   const result = await agent.invoke({
-    messages: [new HumanMessage("Add 3 and 4.")],
+    messages: [
+      new HumanMessage("Add 3 and 4. Then multiply the result by 2. Give the result in French"),
+      // new HumanMessage("Give the result in French")
+    ],
   });
 
   // Output
