@@ -1,89 +1,165 @@
-import "dotenv/config";
-import { ChatOpenAI } from "@langchain/openai";
+// ==============================
+// Step 1: Define tools and model
+// ==============================
+
+import { ChatAnthropic } from "@langchain/anthropic";
 import { tool } from "@langchain/core/tools";
-import { z } from "zod";
-import { StateGraph, MessagesAnnotation } from "@langchain/langgraph";
-import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { AIMessage } from "@langchain/core/messages";
+import * as z from "zod";
 
-// Define a simple search tool (placeholder for a real search API)
-const searchTool = tool(
-  async ({ query }: { query: string }) => {
-    // In a real application, this would call a search API such as Tavily
-    // For the quickstart, we return a mocked response
-    if (query.toLowerCase().includes("weather")) {
-      return "The weather is sunny with a high of 72°F (22°C).";
-    }
-    if (query.toLowerCase().includes("langchain") || query.toLowerCase().includes("langgraph")) {
-      return "LangChain is a framework for developing applications powered by language models. LangGraph is a library built on top of LangChain for building stateful, multi-actor applications with LLMs using graph-based workflows.";
-    }
-    return `Search results for "${query}": No specific information found. Please try a more specific query.`;
-  },
-  {
-    name: "search",
-    description:
-      "Search for information on the web. Use this tool when you need to look up current information or facts.",
-    schema: z.object({
-      query: z.string().describe("The search query to look up"),
-    }),
-  }
-);
-
-const tools = [searchTool];
-
-// Initialize the language model with tool binding
-const model = new ChatOpenAI({
-  model: "gpt-4o-mini",
+const model = new ChatAnthropic({
+  model: "claude-sonnet-4-6",
   temperature: 0,
-}).bindTools(tools);
+});
 
-// Define the function that calls the model
-async function callModel(state: typeof MessagesAnnotation.State) {
-  const response = await model.invoke(state.messages);
-  return { messages: [response] };
-}
+// Define tools
+const add = tool(({ a, b }) => a + b, {
+  name: "add",
+  description: "Add two numbers",
+  schema: z.object({
+    a: z.number().describe("First number"),
+    b: z.number().describe("Second number"),
+  }),
+});
 
-// Define the conditional edge: continue to tools or end
-function shouldContinue(state: typeof MessagesAnnotation.State) {
-  const lastMessage = state.messages[state.messages.length - 1] as AIMessage;
-  // If there are tool calls, route to the tools node
-  if (lastMessage.tool_calls && lastMessage.tool_calls.length > 0) {
-    return "tools";
+const multiply = tool(({ a, b }) => a * b, {
+  name: "multiply",
+  description: "Multiply two numbers",
+  schema: z.object({
+    a: z.number().describe("First number"),
+    b: z.number().describe("Second number"),
+  }),
+});
+
+const divide = tool(({ a, b }) => a / b, {
+  name: "divide",
+  description: "Divide two numbers",
+  schema: z.object({
+    a: z.number().describe("First number"),
+    b: z.number().describe("Second number"),
+  }),
+});
+
+// Tool wiring
+const toolsByName = {
+  [add.name]: add,
+  [multiply.name]: multiply,
+  [divide.name]: divide,
+};
+
+const tools = Object.values(toolsByName);
+const modelWithTools = model.bindTools(tools);
+
+
+// ==============================
+// Step 2: Define state
+// ==============================
+
+import {
+  StateGraph,
+  StateSchema,
+  MessagesValue,
+  ReducedValue,
+  GraphNode,
+  ConditionalEdgeRouter,
+  START,
+  END,
+} from "@langchain/langgraph";
+
+const MessagesState = new StateSchema({
+  messages: MessagesValue,
+  llmCalls: new ReducedValue(
+    z.number().default(0),
+    { reducer: (x, y) => x + y }
+  ),
+});
+
+
+// ==============================
+// Step 3: Model node
+// ==============================
+
+import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
+
+const llmCall: GraphNode<typeof MessagesState> = async (state) => {
+  const response = await modelWithTools.invoke([
+    new SystemMessage(
+      "You are a helpful assistant tasked with performing arithmetic on a set of inputs."
+    ),
+    ...state.messages,
+  ]);
+
+  return {
+    messages: [response],
+    llmCalls: 1,
+  };
+};
+
+
+// ==============================
+// Step 4: Tool node
+// ==============================
+
+const toolNode: GraphNode<typeof MessagesState> = async (state) => {
+  const lastMessage = state.messages[state.messages.length - 1];
+
+  if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
+    return { messages: [] };
   }
-  // Otherwise, stop (reply to the user)
-  return "__end__";
-}
 
-// Build the state graph
-const toolNode = new ToolNode(tools);
+  const result: ToolMessage[] = [];
 
-const workflow = new StateGraph(MessagesAnnotation)
-  .addNode("agent", callModel)
-  .addNode("tools", toolNode)
-  .addEdge("__start__", "agent")
-  .addConditionalEdges("agent", shouldContinue)
-  .addEdge("tools", "agent");
+  for (const toolCall of lastMessage.tool_calls ?? []) {
+    const tool = toolsByName[toolCall.name as keyof typeof toolsByName];
+    const observation = await tool.invoke(toolCall);
+    result.push(observation);
+  }
 
-// Compile the graph into a runnable
-export const app = workflow.compile();
+  return { messages: result };
+};
 
-// Main function to run the agent
+
+// ==============================
+// Step 5: Conditional routing
+// ==============================
+
+const shouldContinue = (state: typeof MessagesState.State) => {
+  const lastMessage = state.messages[state.messages.length - 1];
+
+  if (!lastMessage || !AIMessage.isInstance(lastMessage)) {
+    return END;
+  }
+
+  if (lastMessage.tool_calls?.length) {
+    return "toolNode";
+  }
+
+  return END;
+};
+
+
+// ==============================
+// Step 6: Build and run agent
+// ==============================
+
+import { HumanMessage } from "@langchain/core/messages";
+
+const agent = new StateGraph(MessagesState)
+  .addNode("llmCall", llmCall)
+  .addNode("toolNode", toolNode)
+  .addEdge(START, "llmCall")
+  .addConditionalEdges("llmCall", shouldContinue, ["toolNode", END])
+  .addEdge("toolNode", "llmCall")
+  .compile();
+
+// Invoke
 async function main() {
-  console.log("LangGraph Agent Quickstart\n");
+  const result = await agent.invoke({
+    messages: [new HumanMessage("Add 3 and 4.")],
+  });
 
-  const inputs = [
-    "What is the weather like today?",
-    "What is LangGraph and how does it relate to LangChain?",
-    "What is 2 + 2?",
-  ];
-
-  for (const userMessage of inputs) {
-    console.log(`User: ${userMessage}`);
-    const result = await app.invoke({
-      messages: [{ role: "user", content: userMessage }],
-    });
-    const lastMessage = result.messages[result.messages.length - 1];
-    console.log(`Assistant: ${lastMessage.content}\n`);
+  // Output
+  for (const message of result.messages) {
+    console.log(`[${message.getType()}]: ${message.text}`);
   }
 }
 
