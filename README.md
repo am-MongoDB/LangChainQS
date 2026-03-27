@@ -144,6 +144,70 @@ npm start
 npm run monitor
 ```
 
+## Viewing `checkpoints` documents
+
+If you want to view the decoded checkpoint documents in MongoDB Compass or `mongosh`, then you can use this aggregation:
+
+```json
+[
+  {
+    $project: {
+      thread_id: 1,
+      checkpoint_id: 1,
+      parent_checkpoint_id: 1,
+      checkpoint_ns: 1,
+      type: 1,
+      checkpoint_text: {
+        $convert: {
+          input: "$checkpoint",
+          to: "string",
+          format: "utf8",
+          onError: null,
+          onNull: null
+        }
+      },
+      metadata_text: {
+        $convert: {
+          input: "$metadata",
+          to: "string",
+          format: "utf8",
+          onError: null,
+          onNull: null
+        }
+      }
+    }
+  },
+  {
+    $addFields: {
+      checkpoint_decoded: {
+        $function: {
+          body: function (json) {
+            return json ? JSON.parse(json) : null;
+          },
+          args: ["$checkpoint_text"],
+          lang: "js"
+        }
+      },
+      metadata_decoded: {
+        $function: {
+          body: function (json) {
+            return json ? JSON.parse(json) : null;
+          },
+          args: ["$metadata_text"],
+          lang: "js"
+        }
+      }
+    }
+  },
+  {
+    $project: {
+      checkpoint_text: 0,
+      metadata_text: 0
+    }
+  }
+]
+```
+
 ## Notes
 
 1. The project uses GPT-5.4 through an OpenAI-compatible endpoint configured in [src/agent.js](src/agent.js).
