@@ -1,7 +1,10 @@
 import { tool } from "@langchain/core/tools";
 import * as z from "zod";
 import "dotenv/config"; 
+import { randomUUID } from "node:crypto";
+import { MongoClient } from "mongodb";
 import { ChatOpenAI } from "@langchain/openai";
+import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb";
 import {
   StateGraph,
   StateSchema,
@@ -10,13 +13,14 @@ import {
   START,
   END,
 } from "@langchain/langgraph";
-import { SystemMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
-import { HumanMessage } from "@langchain/core/messages";
+import { SystemMessage, AIMessage, HumanMessage } from "@langchain/core/messages";
 
 const model = new ChatOpenAI({
   modelName: "gpt-5.4",
   temperature: 0,
   configuration: {
+    // You can delete the baseURL to use the default OpenAI API endpoint if 
+    // you're not accessing the LLM through the Grove Gateway.
     baseURL: "https://grove-gateway-prod.azure-api.net/grove-foundry-prod/openai/v1",
     apiKey: "placeholder",
     defaultHeaders: {
@@ -67,6 +71,28 @@ const toolsByName = {
 
 const tools = Object.values(toolsByName);
 const modelWithTools = model.bindTools(tools);
+
+function getRequiredEnv(name) {
+  const value = process.env[name];
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+
+  return value;
+}
+
+async function createCheckpointer() {
+  const mongoUrl = getRequiredEnv("MONGODB_URL");
+  const client = new MongoClient(mongoUrl);
+
+  await client.connect();
+
+  return {
+    client,
+    checkpointer: new MongoDBSaver({ client }),
+  };
+}
 
 
 // ==============================
@@ -146,26 +172,45 @@ const shouldContinue = (state) => {
 // Step 6: Build and run agent
 // ==============================
 
-const agent = new StateGraph(MessagesState)
-  .addNode("llmCall", llmCall)
-  .addNode("toolNode", toolNode)
-  .addEdge(START, "llmCall")
-  .addConditionalEdges("llmCall", shouldContinue, ["toolNode", END])
-  .addEdge("toolNode", "llmCall")
-  .compile();
+function createAgent(checkpointer) {
+  return new StateGraph(MessagesState)
+    .addNode("llmCall", llmCall)
+    .addNode("toolNode", toolNode)
+    .addEdge(START, "llmCall")
+    .addConditionalEdges("llmCall", shouldContinue, ["toolNode", END])
+    .addEdge("toolNode", "llmCall")
+    .compile({ checkpointer });
+}
 
 // Invoke
 async function main() {
-  const result = await agent.invoke({
-    messages: [
-      new HumanMessage("Add 3 and 4. Then multiply the result by 2. Give the result in French"),
-      // new HumanMessage("Give the result in French")
-    ],
-  });
+  const sessionId = process.env.LANGGRAPH_SESSION_ID ?? randomUUID();
+  const { client, checkpointer } = await createCheckpointer();
 
-  // Output
-  for (const message of result.messages) {
-    console.log(`[${message.getType()}]: ${message.text}`);
+  try {
+    const agent = createAgent(checkpointer);
+    const config = {
+      configurable: {
+        thread_id: sessionId,
+      },
+    };
+    const result = await agent.invoke(
+      {
+        messages: [
+          new HumanMessage("If previous value exists, add 5 to it. Otherwise, start with 10.")
+          // new HumanMessage("Give the result in French")
+        ],
+      },
+      config
+    );
+
+    console.log(`Session ID: ${sessionId}`);
+
+    for (const message of result.messages) {
+      console.log(`[${message.getType()}]: ${message.text}`);
+    }
+  } finally {
+    await client.close();
   }
 }
 
