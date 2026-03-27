@@ -80,7 +80,7 @@ function decodeCheckpointDocument(document) {
 }
 
 async function monitorCheckpoints() {
-  const mongoUrl = process.env.MONGODB_URL || "mongodb://localhost:27017/langchainqs";
+  const mongoUrl = process.env.MONGODB_URL || "mongodb://localhost:27017/LangChainQS";
   const client = new MongoClient(mongoUrl);
 
   try {
